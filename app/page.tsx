@@ -17,6 +17,17 @@ import { experimental_useObject as useObject } from 'ai/react'
 import { usePostHog } from 'posthog-js/react'
 import { SetStateAction, useEffect, useState } from 'react'
 import { useLocalStorage } from 'usehooks-ts'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import Image from 'next/image'
+import 'core-js/features/object/group-by.js' // For Object.groupBy
 
 export default function Home() {
   const [chatInput, setChatInput] = useLocalStorage('chat', '')
@@ -251,6 +262,40 @@ export default function Home() {
             files={files}
             handleFileChange={handleFileChange}
           >
+            <div className="flex flex-col">
+              <Select
+                name="languageModel"
+                value={languageModel.model}
+                onValueChange={(e) => handleLanguageModelChange({ model: e })}
+              >
+                <SelectTrigger className="whitespace-nowrap border-none shadow-none focus:ring-0 px-0 py-0 h-6 text-xs">
+                  <SelectValue placeholder="Language model" />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(
+                    Object.groupBy(filteredModels, ({ provider }) => provider),
+                  ).map(([provider, models]) => (
+                    <SelectGroup key={provider}>
+                      <SelectLabel>{provider}</SelectLabel>
+                      {models?.map((model) => (
+                        <SelectItem key={model.id} value={model.id}>
+                          <div className="flex items-center space-x-2">
+                            <Image
+                              className="flex"
+                              src={`/thirdparty/logos/${model.providerId}.svg`}
+                              alt={model.provider}
+                              width={14}
+                              height={14}
+                            />
+                            <span>{model.name}</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <ChatSettings
               languageModel={languageModel}
               onLanguageModelChange={handleLanguageModelChange}

@@ -1,15 +1,19 @@
+// FILE: app/api/chat/route.ts
 import { Duration } from '@/lib/duration'
 import { getModelClient } from '@/lib/models'
 import { LLMModel, LLMModelConfig } from '@/lib/models'
 import { toPrompt } from '@/lib/prompt'
 import ratelimit from '@/lib/ratelimit'
-import { aiResponseSchema as schema } from '@/lib/schema'
-import { streamObject, LanguageModel, CoreMessage } from 'ai'
+import {
+  streamText,
+  LanguageModel,
+  CoreMessage,
+} from 'ai'            // (same import)
 
 export const maxDuration = 60
 
 const rateLimitMaxRequests = process.env.RATE_LIMIT_MAX_REQUESTS
-  ? parseInt(process.env.RATE_LIMIT_MAX_REQUESTS)
+  ? parseInt(process.env.RATE_LIMIT_MAX_REQUESTS, 10)
   : 10
 const ratelimitWindow = process.env.RATE_LIMIT_WINDOW
   ? (process.env.RATE_LIMIT_WINDOW as Duration)
@@ -51,66 +55,54 @@ export async function POST(req: Request) {
 
   console.log('userID', userID)
   console.log('teamID', teamID)
-  // console.log('template', template)
   console.log('model', model)
-  // console.log('config', config)
 
   const { model: modelNameString, apiKey: modelApiKey, ...modelParams } = config
   const modelClient = getModelClient(model, config)
 
   try {
-    const stream = await streamObject({
+    const result = await streamText({
       model: modelClient as LanguageModel,
-      schema,
       system: toPrompt(),
       messages,
-      maxRetries: 0, // do not retry on errors
+      maxRetries: 0,
       ...modelParams,
     })
 
-    return stream.toTextStreamResponse()
+    // ----------- KEY LINE: return data-stream -----------
+    return result.toDataStreamResponse()
+    // ----------------------------------------------------
   } catch (error: any) {
-    const isRateLimitError =
+    const rateLimited =
       error && (error.statusCode === 429 || error.message.includes('limit'))
-    const isOverloadedError =
+    const overloaded =
       error && (error.statusCode === 529 || error.statusCode === 503)
-    const isAccessDeniedError =
+    const accessDenied =
       error && (error.statusCode === 403 || error.statusCode === 401)
 
-    if (isRateLimitError) {
+    if (rateLimited) {
       return new Response(
         'The provider is currently unavailable due to request limit. Try using your own API key.',
-        {
-          status: 429,
-        },
+        { status: 429 },
       )
     }
-
-    if (isOverloadedError) {
+    if (overloaded) {
       return new Response(
         'The provider is currently unavailable. Please try again later.',
-        {
-          status: 529,
-        },
+        { status: 529 },
       )
     }
-
-    if (isAccessDeniedError) {
+    if (accessDenied) {
       return new Response(
         'Access denied. Please make sure your API key is valid.',
-        {
-          status: 403,
-        },
+        { status: 403 },
       )
     }
 
     console.error('Error:', error)
-
     return new Response(
       'An unexpected error has occurred. Please try again later.',
-      {
-        status: 500,
-      },
+      { status: 500 },
     )
   }
 }

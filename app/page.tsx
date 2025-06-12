@@ -1,3 +1,4 @@
+// FILE: app/page.tsx
 'use client'
 
 import { ViewType } from '@/components/auth'
@@ -10,10 +11,8 @@ import { useAuth } from '@/lib/auth'
 import { Message, toAISDKMessages, toMessageImage } from '@/lib/messages'
 import { LLMModelConfig } from '@/lib/models'
 import modelsList from '@/lib/models.json'
-import { AiResponseSchema, aiResponseSchema as schema } from '@/lib/schema'
 import { supabase } from '@/lib/supabase'
-import { DeepPartial } from 'ai'
-import { experimental_useObject as useObject } from 'ai/react'
+import { useCompletion } from 'ai/react'
 import { usePostHog } from 'posthog-js/react'
 import { SetStateAction, useEffect, useState } from 'react'
 import { useLocalStorage } from 'usehooks-ts'
@@ -34,15 +33,12 @@ export default function Home() {
   const [files, setFiles] = useState<File[]>([])
   const [languageModel, setLanguageModel] = useLocalStorage<LLMModelConfig>(
     'languageModel',
-    {
-      model: 'claude-3-5-sonnet-latest',
-    },
+    { model: 'claude-3-5-sonnet-latest' },
   )
 
   const posthog = usePostHog()
 
   const [messages, setMessages] = useState<Message[]>([])
-  const [fragment, setFragment] = useState<DeepPartial<AiResponseSchema>>()
   const [isAuthDialogOpen, setAuthDialog] = useState(false)
   const [authView, setAuthView] = useState<ViewType>('sign_in')
   const [isRateLimited, setIsRateLimited] = useState(false)
@@ -59,122 +55,82 @@ export default function Home() {
   const currentModel = filteredModels.find(
     (model) => model.id === languageModel.model,
   )
-  const lastMessage = messages[messages.length - 1]
 
-  const { object, submit, isLoading, stop, error } = useObject({
+  // -------------------  useCompletion -------------------
+  const { completion, isLoading, stop, error, complete } = useCompletion({
     api: '/api/chat',
-    schema,
-    onError: (error) => {
-      console.error('Error submitting request:', error)
-      if (error.message.includes('limit')) {
-        setIsRateLimited(true)
-      }
-
-      setErrorMessage(error.message)
-    },
-    onFinish: async ({ object: aiResponse, error }) => {
-      if (!error) {
-        // TODO: Implement what should happen on finish
-        // Example: posthog.capture('ai_response_generated', { title: aiResponse?.title });
-      }
+    // No streamProtocol override ⇒ default "data" - matches server below
+    onError: (err) => {
+      console.error('Error submitting request:', err)
+      if (err.message.includes('limit')) setIsRateLimited(true)
+      setErrorMessage(err.message)
     },
   })
+  // ------------------------------------------------------
 
   useEffect(() => {
-    if (object) {
-      setFragment(object)
-      const content: Message['content'] = [
-        { type: 'text', text: object.commentary || '' },
-        { type: 'code', text: object.code || '' },
+    if (!completion) return
+    setMessages((curr) => {
+      const last = curr[curr.length - 1]
+      if (last?.role === 'assistant') {
+        const updated = [...curr]
+        updated[curr.length - 1].content = [{ type: 'text', text: completion }]
+        return updated
+      }
+      return [
+        ...curr,
+        { role: 'assistant', content: [{ type: 'text', text: completion }] },
       ]
-
-      if (!lastMessage || lastMessage.role !== 'assistant') {
-        addMessage({
-          role: 'assistant',
-          content,
-          object,
-        })
-      }
-
-      if (lastMessage && lastMessage.role === 'assistant') {
-        setMessage({
-          content,
-          object,
-        })
-      }
-    }
-  }, [object])
+    })
+  }, [completion])
 
   useEffect(() => {
     if (error) stop()
   }, [error])
 
-  function setMessage(message: Partial<Message>, index?: number) {
-    setMessages((previousMessages) => {
-      const updatedMessages = [...previousMessages]
-      updatedMessages[index ?? previousMessages.length - 1] = {
-        ...previousMessages[index ?? previousMessages.length - 1],
-        ...message,
-      }
-
-      return updatedMessages
-    })
-  }
-
   async function handleSubmitAuth(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
-
-    if (!session) {
-      return setAuthDialog(true)
-    }
-
+    if (!session) return setAuthDialog(true)
     if (isLoading) {
       stop()
+      return
     }
 
     const content: Message['content'] = [{ type: 'text', text: chatInput }]
     const images = await toMessageImage(files)
+    images.forEach((img) => content.push({ type: 'image', image: img }))
 
-    if (images.length > 0) {
-      images.forEach((image) => {
-        content.push({ type: 'image', image })
-      })
-    }
+    const userMessage: Message = { role: 'user', content }
+    const newMessages = [...messages, userMessage]
+    setMessages(newMessages)
 
-    const updatedMessages = addMessage({
-      role: 'user',
-      content,
-    })
-
-    submit({
-      userID: session?.user?.id,
-      teamID: userTeam?.id,
-      messages: toAISDKMessages(updatedMessages),
-      model: currentModel,
-      config: languageModel,
+    complete(chatInput, {
+      body: {
+        messages: toAISDKMessages(newMessages),
+        model: currentModel,
+        config: languageModel,
+        userID: session?.user?.id,
+        teamID: userTeam?.id,
+      },
     })
 
     setChatInput('')
     setFiles([])
-
-    posthog.capture('chat_submit', {
-      model: languageModel.model,
-    })
+    posthog.capture('chat_submit', { model: languageModel.model })
   }
 
   function retry() {
-    submit({
-      userID: session?.user?.id,
-      teamID: userTeam?.id,
-      messages: toAISDKMessages(messages),
-      model: currentModel,
-      config: languageModel,
+    const lastUserMsg = messages.findLast((m) => m.role === 'user')
+    if (!lastUserMsg) return
+    complete(lastUserMsg.content[0].text, {
+      body: {
+        messages: toAISDKMessages(messages),
+        model: currentModel,
+        config: languageModel,
+        userID: session?.user?.id,
+        teamID: userTeam?.id,
+      },
     })
-  }
-
-  function addMessage(message: Message) {
-    setMessages((previousMessages) => [...previousMessages, message])
-    return [...messages, message]
   }
 
   function handleSaveInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
@@ -196,14 +152,12 @@ export default function Home() {
   }
 
   function handleSocialClick(target: 'github' | 'x' | 'discord') {
-    if (target === 'github') {
-      window.open('https://github.com/e2b-dev/fragments', '_blank')
-    } else if (target === 'x') {
-      window.open('https://x.com/e2b_dev', '_blank')
-    } else if (target === 'discord') {
-      window.open('https://discord.gg/U7KEcGErtQ', '_blank')
-    }
-
+    const urls = {
+      github: 'https://github.com/e2b-dev/fragments',
+      x: 'https://x.com/e2b_dev',
+      discord: 'https://discord.gg/U7KEcGErtQ',
+    } as const
+    window.open(urls[target], '_blank')
     posthog.capture(`${target}_click`)
   }
 
@@ -212,12 +166,10 @@ export default function Home() {
     setChatInput('')
     setFiles([])
     setMessages([])
-    setFragment(undefined)
   }
 
   function handleUndo() {
-    setMessages((previousMessages) => [...previousMessages.slice(0, -2)])
-    setFragment(undefined)
+    setMessages((prev) => [...prev.slice(0, -2)])
   }
 
   return (
@@ -230,10 +182,8 @@ export default function Home() {
           supabase={supabase}
         />
       )}
-      <div className="grid w-full md:grid-cols-2">
-        <div
-          className={`flex flex-col w-full max-h-full max-w-[800px] mx-auto px-4 overflow-auto ${fragment ? 'col-span-1' : 'col-span-2'}`}
-        >
+      <div className="grid w-full md:grid-cols-1">
+        <div className="flex flex-col w-full max-h-full max-w-[800px] mx-auto px-4 overflow-auto">
           <NavBar
             session={session}
             showLogin={() => setAuthDialog(true)}
@@ -244,10 +194,7 @@ export default function Home() {
             canUndo={messages.length > 1 && !isLoading}
             onUndo={handleUndo}
           />
-          <Chat
-            messages={messages}
-            isLoading={isLoading}
-          />
+          <Chat messages={messages} isLoading={isLoading} />
           <ChatInput
             retry={retry}
             isErrored={error !== undefined}
@@ -266,7 +213,7 @@ export default function Home() {
               <Select
                 name="languageModel"
                 value={languageModel.model}
-                onValueChange={(e) => handleLanguageModelChange({ model: e })}
+                onValueChange={(v) => handleLanguageModelChange({ model: v })}
               >
                 <SelectTrigger className="whitespace-nowrap border-none shadow-none focus:ring-0 px-0 py-0 h-6 text-xs">
                   <SelectValue placeholder="Language model" />
@@ -277,17 +224,16 @@ export default function Home() {
                   ).map(([provider, models]) => (
                     <SelectGroup key={provider}>
                       <SelectLabel>{provider}</SelectLabel>
-                      {models?.map((model) => (
-                        <SelectItem key={model.id} value={model.id}>
+                      {models?.map((m) => (
+                        <SelectItem key={m.id} value={m.id}>
                           <div className="flex items-center space-x-2">
                             <Image
-                              className="flex"
-                              src={`/thirdparty/logos/${model.providerId}.svg`}
-                              alt={model.provider}
+                              src={`/thirdparty/logos/${m.providerId}.svg`}
+                              alt={m.provider}
                               width={14}
                               height={14}
                             />
-                            <span>{model.name}</span>
+                            <span>{m.name}</span>
                           </div>
                         </SelectItem>
                       ))}

@@ -1,21 +1,3 @@
-import { TemplateId } from './templates'
-import { ExecutionError, Result } from '@e2b/code-interpreter'
-
-type ExecutionResultBase = {
-  sbxId: string
-}
-
-export type ExecutionResultInterpreter = ExecutionResultBase & {
-  template: 'code-interpreter-v1'
-  stdout: string[]
-  stderr: string[]
-  runtimeError?: ExecutionError
-  cellResults: Result[]
-}
-
-export type ExecutionResultWeb = ExecutionResultBase & {
-  template: Exclude<TemplateId, 'code-interpreter-v1'>
-  url: string
-}
-
-export type ExecutionResult = ExecutionResultInterpreter | ExecutionResultWeb
+// This file is intentionally left blank as all previous types were related to
+// e2b/code-interpreter functionality which has been removed.
+// It can be deleted if no longer imported by other modules.

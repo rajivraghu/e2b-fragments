@@ -3,8 +3,7 @@ import { getModelClient } from '@/lib/models'
 import { LLMModel, LLMModelConfig } from '@/lib/models'
 import { toPrompt } from '@/lib/prompt'
 import ratelimit from '@/lib/ratelimit'
-import { fragmentSchema as schema } from '@/lib/schema'
-import { Templates } from '@/lib/templates'
+import { aiResponseSchema as schema } from '@/lib/schema'
 import { streamObject, LanguageModel, CoreMessage } from 'ai'
 
 export const maxDuration = 60
@@ -21,14 +20,12 @@ export async function POST(req: Request) {
     messages,
     userID,
     teamID,
-    template,
     model,
     config,
   }: {
     messages: CoreMessage[]
     userID: string | undefined
     teamID: string | undefined
-    template: Templates
     model: LLMModel
     config: LLMModelConfig
   } = await req.json()
@@ -65,7 +62,7 @@ export async function POST(req: Request) {
     const stream = await streamObject({
       model: modelClient as LanguageModel,
       schema,
-      system: toPrompt(template),
+      system: toPrompt(),
       messages,
       maxRetries: 0, // do not retry on errors
       ...modelParams,

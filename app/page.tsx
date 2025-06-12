@@ -4,18 +4,14 @@ import { ViewType } from '@/components/auth'
 import { AuthDialog } from '@/components/auth-dialog'
 import { Chat } from '@/components/chat'
 import { ChatInput } from '@/components/chat-input'
-import { ChatPicker } from '@/components/chat-picker'
 import { ChatSettings } from '@/components/chat-settings'
 import { NavBar } from '@/components/navbar'
-import { Preview } from '@/components/preview'
 import { useAuth } from '@/lib/auth'
 import { Message, toAISDKMessages, toMessageImage } from '@/lib/messages'
 import { LLMModelConfig } from '@/lib/models'
 import modelsList from '@/lib/models.json'
-import { FragmentSchema, fragmentSchema as schema } from '@/lib/schema'
+import { AiResponseSchema, aiResponseSchema as schema } from '@/lib/schema'
 import { supabase } from '@/lib/supabase'
-import templates, { TemplateId } from '@/lib/templates'
-import { ExecutionResult } from '@/lib/types'
 import { DeepPartial } from 'ai'
 import { experimental_useObject as useObject } from 'ai/react'
 import { usePostHog } from 'posthog-js/react'
@@ -25,9 +21,6 @@ import { useLocalStorage } from 'usehooks-ts'
 export default function Home() {
   const [chatInput, setChatInput] = useLocalStorage('chat', '')
   const [files, setFiles] = useState<File[]>([])
-  const [selectedTemplate, setSelectedTemplate] = useState<'auto' | TemplateId>(
-    'auto',
-  )
   const [languageModel, setLanguageModel] = useLocalStorage<LLMModelConfig>(
     'languageModel',
     {
@@ -37,11 +30,8 @@ export default function Home() {
 
   const posthog = usePostHog()
 
-  const [result, setResult] = useState<ExecutionResult>()
   const [messages, setMessages] = useState<Message[]>([])
-  const [fragment, setFragment] = useState<DeepPartial<FragmentSchema>>()
-  const [currentTab, setCurrentTab] = useState<'code' | 'fragment'>('code')
-  const [isPreviewLoading, setIsPreviewLoading] = useState(false)
+  const [fragment, setFragment] = useState<DeepPartial<AiResponseSchema>>()
   const [isAuthDialogOpen, setAuthDialog] = useState(false)
   const [authView, setAuthView] = useState<ViewType>('sign_in')
   const [isRateLimited, setIsRateLimited] = useState(false)
@@ -58,10 +48,6 @@ export default function Home() {
   const currentModel = filteredModels.find(
     (model) => model.id === languageModel.model,
   )
-  const currentTemplate =
-    selectedTemplate === 'auto'
-      ? templates
-      : { [selectedTemplate]: templates[selectedTemplate] }
   const lastMessage = messages[messages.length - 1]
 
   const { object, submit, isLoading, stop, error } = useObject({
@@ -75,34 +61,10 @@ export default function Home() {
 
       setErrorMessage(error.message)
     },
-    onFinish: async ({ object: fragment, error }) => {
+    onFinish: async ({ object: aiResponse, error }) => {
       if (!error) {
-        // send it to /api/sandbox
-        console.log('fragment', fragment)
-        setIsPreviewLoading(true)
-        posthog.capture('fragment_generated', {
-          template: fragment?.template,
-        })
-
-        const response = await fetch('/api/sandbox', {
-          method: 'POST',
-          body: JSON.stringify({
-            fragment,
-            userID: session?.user?.id,
-            teamID: userTeam?.id,
-            accessToken: session?.access_token,
-          }),
-        })
-
-        const result = await response.json()
-        console.log('result', result)
-        posthog.capture('sandbox_created', { url: result.url })
-
-        setResult(result)
-        setCurrentPreview({ fragment, result })
-        setMessage({ result })
-        setCurrentTab('fragment')
-        setIsPreviewLoading(false)
+        // TODO: Implement what should happen on finish
+        // Example: posthog.capture('ai_response_generated', { title: aiResponse?.title });
       }
     },
   })
@@ -177,17 +139,14 @@ export default function Home() {
       userID: session?.user?.id,
       teamID: userTeam?.id,
       messages: toAISDKMessages(updatedMessages),
-      template: currentTemplate,
       model: currentModel,
       config: languageModel,
     })
 
     setChatInput('')
     setFiles([])
-    setCurrentTab('code')
 
     posthog.capture('chat_submit', {
-      template: selectedTemplate,
       model: languageModel.model,
     })
   }
@@ -197,7 +156,6 @@ export default function Home() {
       userID: session?.user?.id,
       teamID: userTeam?.id,
       messages: toAISDKMessages(messages),
-      template: currentTemplate,
       model: currentModel,
       config: languageModel,
     })
@@ -244,22 +202,11 @@ export default function Home() {
     setFiles([])
     setMessages([])
     setFragment(undefined)
-    setResult(undefined)
-    setCurrentTab('code')
-    setIsPreviewLoading(false)
-  }
-
-  function setCurrentPreview(preview: {
-    fragment: DeepPartial<FragmentSchema> | undefined
-    result: ExecutionResult | undefined
-  }) {
-    setFragment(preview.fragment)
-    setResult(preview.result)
   }
 
   function handleUndo() {
     setMessages((previousMessages) => [...previousMessages.slice(0, -2)])
-    setCurrentPreview({ fragment: undefined, result: undefined })
+    setFragment(undefined)
   }
 
   return (
@@ -289,7 +236,6 @@ export default function Home() {
           <Chat
             messages={messages}
             isLoading={isLoading}
-            setCurrentPreview={setCurrentPreview}
           />
           <ChatInput
             retry={retry}
@@ -305,14 +251,6 @@ export default function Home() {
             files={files}
             handleFileChange={handleFileChange}
           >
-            <ChatPicker
-              templates={templates}
-              selectedTemplate={selectedTemplate}
-              onSelectedTemplateChange={setSelectedTemplate}
-              models={filteredModels}
-              languageModel={languageModel}
-              onLanguageModelChange={handleLanguageModelChange}
-            />
             <ChatSettings
               languageModel={languageModel}
               onLanguageModelChange={handleLanguageModelChange}
@@ -321,17 +259,6 @@ export default function Home() {
             />
           </ChatInput>
         </div>
-        <Preview
-          teamID={userTeam?.id}
-          accessToken={session?.access_token}
-          selectedTab={currentTab}
-          onSelectedTabChange={setCurrentTab}
-          isChatLoading={isLoading}
-          isPreviewLoading={isPreviewLoading}
-          fragment={fragment}
-          result={result as ExecutionResult}
-          onClose={() => setFragment(undefined)}
-        />
       </div>
     </main>
   )
